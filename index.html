@@ -63,26 +63,37 @@
                 let minX = width, maxX = 0, minY = height, maxY = 0;
                 let foundPixels = false;
                 
-                // Calculate average brightness to determine threshold dynamically
-                let totalBrightness = 0;
-                let pixelCount = 0;
-                for (let y = 0; y < height; y++) {
-                    for (let x = 0; x < width; x++) {
-                        const i = (y * width + x) * 4;
-                        const r = imageData[i];
-                        const g = imageData[i + 1];
-                        const b = imageData[i + 2];
-                        const brightness = (r + g + b) / 3;
-                        totalBrightness += brightness;
-                        pixelCount++;
+                // Multi-pass detection for better accuracy with light backgrounds
+                
+                // First pass: detect edges using gradient magnitude
+                const edgeData = new Uint8Array(width * height);
+                const sobelX = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
+                const sobelY = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
+                
+                for (let y = 1; y < height - 1; y++) {
+                    for (let x = 1; x < width - 1; x++) {
+                        let gx = 0, gy = 0;
+                        
+                        for (let ky = -1; ky <= 1; ky++) {
+                            for (let kx = -1; kx <= 1; kx++) {
+                                const idx = ((y + ky) * width + (x + kx)) * 4;
+                                const gray = (imageData[idx] + imageData[idx + 1] + imageData[idx + 2]) / 3;
+                                const kernelIdx = (ky + 1) * 3 + (kx + 1);
+                                gx += gray * sobelX[kernelIdx];
+                                gy += gray * sobelY[kernelIdx];
+                            }
+                        }
+                        
+                        const magnitude = Math.sqrt(gx * gx + gy * gy);
+                        edgeData[y * width + x] = magnitude;
                     }
                 }
-                const avgBrightness = totalBrightness / pixelCount;
                 
-                // Use adaptive threshold - if image is dark overall, lower the threshold
-                const threshold = avgBrightness > 200 ? 240 : avgBrightness * 0.95;
+                // Find threshold using percentile (more robust than average)
+                const sortedEdges = Array.from(edgeData).sort((a, b) => a - b);
+                const edgeThreshold = sortedEdges[Math.floor(sortedEdges.length * 0.85)];
                 
-                // Find bounds of non-background pixels
+                // Second pass: use edge detection + color variance
                 for (let y = 0; y < height; y++) {
                     for (let x = 0; x < width; x++) {
                         const i = (y * width + x) * 4;
@@ -90,10 +101,28 @@
                         const g = imageData[i + 1];
                         const b = imageData[i + 2];
                         const a = imageData[i + 3];
-                        const brightness = (r + g + b) / 3;
                         
-                        // Check for non-transparent pixels that differ from background
-                        if (a > 10 && (brightness < threshold || Math.abs(r - g) > 10 || Math.abs(g - b) > 10)) {
+                        // Check for transparency first
+                        if (a < 250) {
+                            minX = Math.min(minX, x);
+                            maxX = Math.max(maxX, x);
+                            minY = Math.min(minY, y);
+                            maxY = Math.max(maxY, y);
+                            foundPixels = true;
+                            continue;
+                        }
+                        
+                        const edgeStrength = edgeData[y * width + x];
+                        const brightness = (r + g + b) / 3;
+                        const saturation = Math.max(Math.abs(r - brightness), Math.abs(g - brightness), Math.abs(b - brightness));
+                        
+                        // Multiple detection methods combined
+                        const isEdge = edgeStrength > Math.max(10, edgeThreshold);
+                        const hasColor = saturation > 5;
+                        const notWhite = brightness < 245;
+                        const hasColorVariance = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b)) > 8;
+                        
+                        if (isEdge || hasColor || notWhite || hasColorVariance) {
                             minX = Math.min(minX, x);
                             maxX = Math.max(maxX, x);
                             minY = Math.min(minY, y);
@@ -103,15 +132,114 @@
                     }
                 }
                 
-                // If no distinct object found, use entire image
-                if (!foundPixels || maxX - minX < 10 || maxY - minY < 10) {
-                    minX = 0;
-                    maxX = width;
-                    minY = 0;
-                    maxY = height;
+                // Third pass: fill any holes in detected region
+                if (foundPixels && (maxX - minX) > 50 && (maxY - minY) > 50) {
+                    // Scan for interior holes and expand bounds if needed
+                    const centerX = (minX + maxX) / 2;
+                    const centerY = (minY + maxY) / 2;
+                    const radius = Math.max(maxX - minX, maxY - minY) / 2;
+                    
+                    // Check if we have a roughly circular object
+                    let edgePixelCount = 0;
+                    const samples = 36; // Check 36 points around the circle
+                    
+                    for (let angle = 0; angle < Math.PI * 2; angle += (Math.PI * 2) / samples) {
+                        const checkX = Math.floor(centerX + Math.cos(angle) * radius * 0.9);
+                        const checkY = Math.floor(centerY + Math.sin(angle) * radius * 0.9);
+                        
+                        if (checkX >= 0 && checkX < width && checkY >= 0 && checkY < height) {
+                            const i = (checkY * width + checkX) * 4;
+                            const brightness = (imageData[i] + imageData[i + 1] + imageData[i + 2]) / 3;
+                            if (brightness < 240 || imageData[i + 3] < 250) {
+                                edgePixelCount++;
+                            }
+                        }
+                    }
+                    
+                    // If most points around the circle have content, it's likely circular
+                    const isLikelyCircular = edgePixelCount > samples * 0.6;
+                    
+                    if (isLikelyCircular) {
+                        // Ensure bounds are square for circular objects
+                        const size = Math.max(maxX - minX, maxY - minY);
+                        const halfSize = size / 2;
+                        minX = Math.max(0, Math.floor(centerX - halfSize));
+                        maxX = Math.min(width, Math.ceil(centerX + halfSize));
+                        minY = Math.max(0, Math.floor(centerY - halfSize));
+                        maxY = Math.min(height, Math.ceil(centerY + halfSize));
+                    }
                 }
                 
-                const padding = 2;
+                // If still no pixels found or bounds too small, use fallback detection
+                if (!foundPixels || (maxX - minX) < 30 || (maxY - minY) < 30) {
+                    // Fallback: scan from edges inward
+                    let topEdge = 0, bottomEdge = height - 1;
+                    let leftEdge = 0, rightEdge = width - 1;
+                    
+                    // Find top edge
+                    outer: for (let y = 0; y < height / 2; y++) {
+                        for (let x = width * 0.2; x < width * 0.8; x++) {
+                            const i = (y * width + Math.floor(x)) * 4;
+                            const brightness = (imageData[i] + imageData[i + 1] + imageData[i + 2]) / 3;
+                            if (brightness < 240 || imageData[i + 3] < 250) {
+                                topEdge = y;
+                                break outer;
+                            }
+                        }
+                    }
+                    
+                    // Find bottom edge
+                    outer: for (let y = height - 1; y > height / 2; y--) {
+                        for (let x = width * 0.2; x < width * 0.8; x++) {
+                            const i = (y * width + Math.floor(x)) * 4;
+                            const brightness = (imageData[i] + imageData[i + 1] + imageData[i + 2]) / 3;
+                            if (brightness < 240 || imageData[i + 3] < 250) {
+                                bottomEdge = y;
+                                break outer;
+                            }
+                        }
+                    }
+                    
+                    // Find left edge
+                    outer: for (let x = 0; x < width / 2; x++) {
+                        for (let y = height * 0.2; y < height * 0.8; y++) {
+                            const i = (Math.floor(y) * width + x) * 4;
+                            const brightness = (imageData[i] + imageData[i + 1] + imageData[i + 2]) / 3;
+                            if (brightness < 240 || imageData[i + 3] < 250) {
+                                leftEdge = x;
+                                break outer;
+                            }
+                        }
+                    }
+                    
+                    // Find right edge
+                    outer: for (let x = width - 1; x > width / 2; x--) {
+                        for (let y = height * 0.2; y < height * 0.8; y++) {
+                            const i = (Math.floor(y) * width + x) * 4;
+                            const brightness = (imageData[i] + imageData[i + 1] + imageData[i + 2]) / 3;
+                            if (brightness < 240 || imageData[i + 3] < 250) {
+                                rightEdge = x;
+                                break outer;
+                            }
+                        }
+                    }
+                    
+                    if (bottomEdge - topEdge > 30 && rightEdge - leftEdge > 30) {
+                        minX = leftEdge;
+                        maxX = rightEdge;
+                        minY = topEdge;
+                        maxY = bottomEdge;
+                        foundPixels = true;
+                    }
+                }
+                
+                // If still nothing found, use the entire image
+                if (!foundPixels) {
+                    return { x: 0, y: 0, width: width, height: height };
+                }
+                
+                // Add small padding
+                const padding = 3;
                 minX = Math.max(0, minX - padding);
                 maxX = Math.min(width, maxX + padding);
                 minY = Math.max(0, minY - padding);
@@ -120,30 +248,26 @@
                 const cropWidth = maxX - minX;
                 const cropHeight = maxY - minY;
                 
-                // Check if object is roughly square (within 15% difference)
+                // Make square if aspect ratio is close
                 const aspectRatio = cropWidth / cropHeight;
-                const isRoughlySquare = aspectRatio > 0.85 && aspectRatio < 1.15;
-                
-                // If roughly square or circular, make it a perfect square
-                // Otherwise, keep the rectangle shape
-                let finalWidth, finalHeight;
-                if (isRoughlySquare) {
+                if (aspectRatio > 0.85 && aspectRatio < 1.15) {
                     const size = Math.max(cropWidth, cropHeight);
-                    finalWidth = size;
-                    finalHeight = size;
-                } else {
-                    finalWidth = cropWidth;
-                    finalHeight = cropHeight;
+                    const centerX = minX + cropWidth / 2;
+                    const centerY = minY + cropHeight / 2;
+                    
+                    return {
+                        x: Math.max(0, Math.floor(centerX - size / 2)),
+                        y: Math.max(0, Math.floor(centerY - size / 2)),
+                        width: Math.min(size, width),
+                        height: Math.min(size, height)
+                    };
                 }
                 
-                const centerX = minX + cropWidth / 2;
-                const centerY = minY + cropHeight / 2;
-                
                 return {
-                    x: Math.max(0, Math.floor(centerX - finalWidth / 2)),
-                    y: Math.max(0, Math.floor(centerY - finalHeight / 2)),
-                    width: Math.min(finalWidth, width),
-                    height: Math.min(finalHeight, height)
+                    x: minX,
+                    y: minY,
+                    width: cropWidth,
+                    height: cropHeight
                 };
             };
 
@@ -303,6 +427,7 @@
                         <div className="text-center mb-8">
                             <h1 className="text-4xl font-bold text-slate-800 mb-2">Snus Pack Batch Auto Cropper</h1>
                             <p className="text-slate-600">Process multiple images at once - automatically crops to square with minimal whitespace</p>
+                            <p className="text-xs text-slate-500 mt-2">Enhanced edge detection for light backgrounds</p>
                         </div>
 
                         <div className="grid md:grid-cols-2 gap-4 mb-8">
