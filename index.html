@@ -119,15 +119,31 @@
                 
                 const cropWidth = maxX - minX;
                 const cropHeight = maxY - minY;
-                const size = Math.max(cropWidth, cropHeight);
+                
+                // Check if object is roughly square (within 15% difference)
+                const aspectRatio = cropWidth / cropHeight;
+                const isRoughlySquare = aspectRatio > 0.85 && aspectRatio < 1.15;
+                
+                // If roughly square or circular, make it a perfect square
+                // Otherwise, keep the rectangle shape
+                let finalWidth, finalHeight;
+                if (isRoughlySquare) {
+                    const size = Math.max(cropWidth, cropHeight);
+                    finalWidth = size;
+                    finalHeight = size;
+                } else {
+                    finalWidth = cropWidth;
+                    finalHeight = cropHeight;
+                }
                 
                 const centerX = minX + cropWidth / 2;
                 const centerY = minY + cropHeight / 2;
                 
                 return {
-                    x: Math.max(0, Math.floor(centerX - size / 2)),
-                    y: Math.max(0, Math.floor(centerY - size / 2)),
-                    size: Math.min(size, Math.min(width, height))
+                    x: Math.max(0, Math.floor(centerX - finalWidth / 2)),
+                    y: Math.max(0, Math.floor(centerY - finalHeight / 2)),
+                    width: Math.min(finalWidth, width),
+                    height: Math.min(finalHeight, height)
                 };
             };
 
@@ -148,14 +164,14 @@
                             const bounds = findCircleBounds(imageData.data, img.width, img.height);
                             
                             const cropCanvas = document.createElement('canvas');
-                            cropCanvas.width = bounds.size;
-                            cropCanvas.height = bounds.size;
+                            cropCanvas.width = bounds.width;
+                            cropCanvas.height = bounds.height;
                             const cropCtx = cropCanvas.getContext('2d');
                             
                             cropCtx.drawImage(
                                 img,
-                                bounds.x, bounds.y, bounds.size, bounds.size,
-                                0, 0, bounds.size, bounds.size
+                                bounds.x, bounds.y, bounds.width, bounds.height,
+                                0, 0, bounds.width, bounds.height
                             );
                             
                             resolve({
