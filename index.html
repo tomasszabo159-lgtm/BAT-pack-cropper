@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Snus Pack Batch Auto Cropper</title>
+    <title>Multi-Mode Batch Cropper</title>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -15,40 +15,40 @@
     <script type="text/babel">
         const { useState, useRef } = React;
 
-        // Lucide React Icons
+        // --- ICONS ---
         const Upload = (props) => (
             <svg {...props} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
         );
-
         const Copy = (props) => (
             <svg {...props} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
             </svg>
         );
-
         const Download = (props) => (
             <svg {...props} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
             </svg>
         );
-
         const X = (props) => (
             <svg {...props} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M18 6L6 18M6 6l12 12"/>
             </svg>
         );
-
         const Check = (props) => (
             <svg {...props} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M20 6L9 17l-5-5"/>
             </svg>
         );
-
         const Trash2 = (props) => (
             <svg {...props} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/>
+            </svg>
+        );
+        const Layers = (props) => (
+            <svg {...props} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
             </svg>
         );
 
@@ -56,173 +56,96 @@
             const [images, setImages] = useState([]);
             const [processing, setProcessing] = useState(false);
             const [pasteActive, setPasteActive] = useState(false);
+            // State for Tabs: 'modern', 'fmc', 'ppt'
+            const [activeTab, setActiveTab] = useState('modern');
+            
             const fileInputRef = useRef(null);
             const pasteAreaRef = useRef(null);
 
-            const findCircleBounds = (imageData, width, height) => {
+            // --- SCANNING LOGIC ---
+
+            // Shared logic to scan pixels and find the bounding box
+            const getRawBounds = (imageData, width, height) => {
                 let minX = width, maxX = 0, minY = height, maxY = 0;
                 let foundPixels = false;
-                
-                // Scan from all four edges to find where content begins
-                // This is more reliable for centered objects on white backgrounds
-                
-                // Scan from top
+
+                // Helper to check pixel validity
+                const isContent = (r, g, b, a) => {
+                    const brightness = (r + g + b) / 3;
+                    // Check if pixel is NOT white/transparent
+                    const isBackground = brightness > 250 && Math.abs(r - g) < 5 && Math.abs(g - b) < 5 && a > 250;
+                    return !isBackground && a > 10;
+                };
+
+                // Scan Y (Top/Bottom)
                 for (let y = 0; y < height; y++) {
-                    let foundInRow = false;
-                    for (let x = width * 0.1; x < width * 0.9; x++) {
-                        const i = (y * width + Math.floor(x)) * 4;
-                        const r = imageData[i];
-                        const g = imageData[i + 1];
-                        const b = imageData[i + 2];
-                        const a = imageData[i + 3];
-                        
-                        // Check if pixel is not white/transparent
-                        const brightness = (r + g + b) / 3;
-                        const isBackground = brightness > 250 && Math.abs(r - g) < 3 && Math.abs(g - b) < 3 && a > 250;
-                        
-                        if (!isBackground && a > 10) {
+                    for (let x = 0; x < width; x++) {
+                        const i = (y * width + x) * 4;
+                        if (isContent(imageData[i], imageData[i+1], imageData[i+2], imageData[i+3])) {
                             minY = Math.min(minY, y);
-                            foundInRow = true;
-                            foundPixels = true;
-                            break;
-                        }
-                    }
-                    if (foundInRow) break;
-                }
-                
-                // Scan from bottom
-                for (let y = height - 1; y >= 0; y--) {
-                    let foundInRow = false;
-                    for (let x = width * 0.1; x < width * 0.9; x++) {
-                        const i = (y * width + Math.floor(x)) * 4;
-                        const r = imageData[i];
-                        const g = imageData[i + 1];
-                        const b = imageData[i + 2];
-                        const a = imageData[i + 3];
-                        
-                        const brightness = (r + g + b) / 3;
-                        const isBackground = brightness > 250 && Math.abs(r - g) < 3 && Math.abs(g - b) < 3 && a > 250;
-                        
-                        if (!isBackground && a > 10) {
                             maxY = Math.max(maxY, y);
-                            foundInRow = true;
-                            foundPixels = true;
-                            break;
-                        }
-                    }
-                    if (foundInRow) break;
-                }
-                
-                // Scan from left
-                for (let x = 0; x < width; x++) {
-                    let foundInColumn = false;
-                    for (let y = height * 0.1; y < height * 0.9; y++) {
-                        const i = (Math.floor(y) * width + x) * 4;
-                        const r = imageData[i];
-                        const g = imageData[i + 1];
-                        const b = imageData[i + 2];
-                        const a = imageData[i + 3];
-                        
-                        const brightness = (r + g + b) / 3;
-                        const isBackground = brightness > 250 && Math.abs(r - g) < 3 && Math.abs(g - b) < 3 && a > 250;
-                        
-                        if (!isBackground && a > 10) {
                             minX = Math.min(minX, x);
-                            foundInColumn = true;
-                            foundPixels = true;
-                            break;
-                        }
-                    }
-                    if (foundInColumn) break;
-                }
-                
-                // Scan from right
-                for (let x = width - 1; x >= 0; x--) {
-                    let foundInColumn = false;
-                    for (let y = height * 0.1; y < height * 0.9; y++) {
-                        const i = (Math.floor(y) * width + x) * 4;
-                        const r = imageData[i];
-                        const g = imageData[i + 1];
-                        const b = imageData[i + 2];
-                        const a = imageData[i + 3];
-                        
-                        const brightness = (r + g + b) / 3;
-                        const isBackground = brightness > 250 && Math.abs(r - g) < 3 && Math.abs(g - b) < 3 && a > 250;
-                        
-                        if (!isBackground && a > 10) {
                             maxX = Math.max(maxX, x);
-                            foundInColumn = true;
                             foundPixels = true;
-                            break;
-                        }
-                    }
-                    if (foundInColumn) break;
-                }
-                
-                // If we didn't find any edges, try a more aggressive scan
-                if (!foundPixels || minX >= maxX || minY >= maxY) {
-                    minX = width; maxX = 0; minY = height; maxY = 0;
-                    
-                    for (let y = 0; y < height; y++) {
-                        for (let x = 0; x < width; x++) {
-                            const i = (y * width + x) * 4;
-                            const r = imageData[i];
-                            const g = imageData[i + 1];
-                            const b = imageData[i + 2];
-                            const a = imageData[i + 3];
-                            
-                            // Very aggressive detection - anything that's not pure white
-                            const brightness = (r + g + b) / 3;
-                            const colorDiff = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
-                            
-                            if (a < 250 || brightness < 252 || colorDiff > 2) {
-                                minX = Math.min(minX, x);
-                                maxX = Math.max(maxX, x);
-                                minY = Math.min(minY, y);
-                                maxY = Math.max(maxY, y);
-                                foundPixels = true;
-                            }
                         }
                     }
                 }
-                
-                // If still nothing found, return original image
-                if (!foundPixels || minX >= maxX || minY >= maxY) {
+
+                if (!foundPixels) return null; // Empty image
+
+                return { minX, maxX, minY, maxY };
+            };
+
+            const calculateCrop = (imageData, width, height, mode) => {
+                // If PPT mode, return full image
+                if (mode === 'ppt') {
                     return { x: 0, y: 0, width: width, height: height };
                 }
+
+                const raw = getRawBounds(imageData, width, height);
                 
-                // Add exactly 3px padding as requested
-                const padding = 3;
-                minX = Math.max(0, minX - padding);
-                maxX = Math.min(width - 1, maxX + padding);
-                minY = Math.max(0, minY - padding);
-                maxY = Math.min(height - 1, maxY + padding);
-                
-                const cropWidth = maxX - minX + 1;
-                const cropHeight = maxY - minY + 1;
-                
-                // Check if the object is roughly square/circular
-                const aspectRatio = cropWidth / cropHeight;
-                if (aspectRatio > 0.85 && aspectRatio < 1.15) {
-                    // Make it perfectly square for circular objects
-                    const size = Math.max(cropWidth, cropHeight);
-                    const centerX = minX + cropWidth / 2;
-                    const centerY = minY + cropHeight / 2;
-                    
-                    return {
-                        x: Math.max(0, Math.floor(centerX - size / 2)),
-                        y: Math.max(0, Math.floor(centerY - size / 2)),
-                        width: Math.min(size, width),
-                        height: Math.min(size, height)
-                    };
+                // If no content found, return full image
+                if (!raw) return { x: 0, y: 0, width: width, height: height };
+
+                let { minX, maxX, minY, maxY } = raw;
+
+                // --- MODE SPECIFIC ADJUSTMENTS ---
+
+                if (mode === 'modern') {
+                    // Modern Oral: Add padding and force square for circles
+                    const padding = 3;
+                    minX = Math.max(0, minX - padding);
+                    maxX = Math.min(width - 1, maxX + padding);
+                    minY = Math.max(0, minY - padding);
+                    maxY = Math.min(height - 1, maxY + padding);
+
+                    const w = maxX - minX + 1;
+                    const h = maxY - minY + 1;
+                    const aspectRatio = w / h;
+
+                    // If roughly square/circular, force perfect square
+                    if (aspectRatio > 0.85 && aspectRatio < 1.15) {
+                        const size = Math.max(w, h);
+                        const centerX = minX + w / 2;
+                        const centerY = minY + h / 2;
+                        return {
+                            x: Math.max(0, Math.floor(centerX - size / 2)),
+                            y: Math.max(0, Math.floor(centerY - size / 2)),
+                            width: Math.min(size, width),
+                            height: Math.min(size, height)
+                        };
+                    }
+                    return { x: minX, y: minY, width: w, height: h };
                 }
-                
-                return {
-                    x: minX,
-                    y: minY,
-                    width: cropWidth,
-                    height: cropHeight
-                };
+
+                if (mode === 'fmc') {
+                    // FMC/HP: Tight crop, NO padding ("without any borders"), exact shape
+                    const w = maxX - minX + 1;
+                    const h = maxY - minY + 1;
+                    return { x: minX, y: minY, width: w, height: h };
+                }
+
+                return { x: 0, y: 0, width: width, height: height };
             };
 
             const processImage = (file) => {
@@ -239,7 +162,8 @@
                             ctx.drawImage(img, 0, 0);
                             
                             const imageData = ctx.getImageData(0, 0, img.width, img.height);
-                            const bounds = findCircleBounds(imageData.data, img.width, img.height);
+                            // Pass the current activeTab to the calculator
+                            const bounds = calculateCrop(imageData.data, img.width, img.height, activeTab);
                             
                             const cropCanvas = document.createElement('canvas');
                             cropCanvas.width = bounds.width;
@@ -256,7 +180,7 @@
                                 id: Date.now() + Math.random(),
                                 original: img.src,
                                 cropped: cropCanvas.toDataURL('image/png'),
-                                canvas: cropCanvas,
+                                mode: activeTab, // Track which mode created this
                                 copied: false
                             });
                         };
@@ -316,10 +240,6 @@
                 }
             };
 
-            const handleDragOver = (e) => {
-                e.preventDefault();
-            };
-
             const copyToClipboard = async (image) => {
                 try {
                     const base64Response = await fetch(image.cropped);
@@ -340,17 +260,17 @@
                             ));
                         }, 2000);
                     } else {
-                        alert('Copy to clipboard is not supported in your browser. Please use the Download button instead.');
+                        alert('Copy to clipboard is not supported in your browser.');
                     }
                 } catch (err) {
                     console.error('Failed to copy:', err);
-                    alert('Failed to copy image. Please try the Download button instead.');
+                    alert('Failed to copy image.');
                 }
             };
 
             const downloadImage = (image) => {
                 const link = document.createElement('a');
-                link.download = `cropped-snus-${image.id}.png`;
+                link.download = `${image.mode}-pack-${image.id}.png`;
                 link.href = image.cropped;
                 link.click();
             };
@@ -359,139 +279,154 @@
                 images.forEach((image, index) => {
                     setTimeout(() => {
                         const link = document.createElement('a');
-                        link.download = `cropped-snus-${index + 1}.png`;
+                        link.download = `${image.mode}-pack-${index + 1}.png`;
                         link.href = image.cropped;
                         link.click();
                     }, index * 200);
                 });
             };
 
-            const removeImage = (id) => {
-                setImages(prev => prev.filter(img => img.id !== id));
-            };
-
-            const clearAll = () => {
-                setImages([]);
-                if (fileInputRef.current) fileInputRef.current.value = '';
-            };
-
             return (
                 <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
                     <div className="max-w-7xl mx-auto">
                         <div className="text-center mb-8">
-                            <h1 className="text-4xl font-bold text-slate-800 mb-2">Snus Pack Batch Auto Cropper</h1>
-                            <p className="text-slate-600">Process multiple images at once - automatically crops to square with minimal whitespace</p>
-                            <p className="text-xs text-slate-500 mt-2">Enhanced edge detection for light backgrounds</p>
+                            <h1 className="text-4xl font-bold text-slate-800 mb-2">Multi-Mode Batch Cropper</h1>
+                            <p className="text-slate-600">Select your mode, then drop or paste images.</p>
                         </div>
 
+                        {/* --- TABS --- */}
+                        <div className="flex justify-center mb-6">
+                            <div className="bg-white p-1 rounded-xl shadow-sm border border-slate-200 inline-flex">
+                                <button
+                                    onClick={() => setActiveTab('modern')}
+                                    className={`px-6 py-2 rounded-lg text-sm font-semibold transition-all ${
+                                        activeTab === 'modern' 
+                                        ? 'bg-blue-600 text-white shadow-md' 
+                                        : 'text-slate-600 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    Modern Oral
+                                    <span className="block text-[10px] font-normal opacity-80">Smart Crop + Square</span>
+                                </button>
+                                <button
+                                    onClick={() => setActiveTab('fmc')}
+                                    className={`px-6 py-2 rounded-lg text-sm font-semibold transition-all ${
+                                        activeTab === 'fmc' 
+                                        ? 'bg-blue-600 text-white shadow-md' 
+                                        : 'text-slate-600 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    FMC / HP
+                                    <span className="block text-[10px] font-normal opacity-80">Tight Crop (No Border)</span>
+                                </button>
+                                <button
+                                    onClick={() => setActiveTab('ppt')}
+                                    className={`px-6 py-2 rounded-lg text-sm font-semibold transition-all ${
+                                        activeTab === 'ppt' 
+                                        ? 'bg-blue-600 text-white shadow-md' 
+                                        : 'text-slate-600 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    PPT
+                                    <span className="block text-[10px] font-normal opacity-80">No Crop (Storage)</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* --- UPLOAD AREA --- */}
                         <div className="grid md:grid-cols-2 gap-4 mb-8">
-                            <div
+                            <div 
                                 onDrop={handleDrop}
-                                onDragOver={handleDragOver}
-                                className="border-4 border-dashed border-blue-300 rounded-2xl p-12 text-center bg-white hover:border-blue-400 transition-colors cursor-pointer"
+                                onDragOver={(e) => e.preventDefault()}
+                                className={`border-4 border-dashed rounded-2xl p-12 text-center bg-white transition-colors cursor-pointer ${
+                                    activeTab === 'ppt' ? 'border-purple-300 hover:border-purple-400' : 'border-blue-300 hover:border-blue-400'
+                                }`}
                                 onClick={() => fileInputRef.current?.click()}
                             >
-                                <Upload className="w-12 h-12 mx-auto mb-4 text-blue-500" />
-                                <p className="text-lg text-slate-700 mb-2 font-semibold">Upload Multiple Images</p>
-                                <p className="text-sm text-slate-500">Click to browse or drag & drop images here</p>
-                                <input
-                                    ref={fileInputRef}
-                                    type="file"
-                                    accept="image/*"
-                                    multiple
-                                    onChange={handleFileChange}
-                                    style={{display: 'none'}}
+                                <Upload className={`w-12 h-12 mx-auto mb-4 ${activeTab === 'ppt' ? 'text-purple-500' : 'text-blue-500'}`} />
+                                <p className="text-lg text-slate-700 mb-2 font-semibold">
+                                    Upload for <span className="uppercase">{activeTab}</span>
+                                </p>
+                                <p className="text-sm text-slate-500">Click or Drag & Drop</p>
+                                <input 
+                                    ref={fileInputRef} 
+                                    type="file" 
+                                    accept="image/*" 
+                                    multiple 
+                                    onChange={handleFileChange} 
+                                    style={{display: 'none'}} 
                                 />
                             </div>
 
-                            <div
+                            <div 
                                 ref={pasteAreaRef}
                                 tabIndex={0}
                                 onPaste={handlePaste}
                                 onFocus={() => setPasteActive(true)}
                                 onBlur={() => setPasteActive(false)}
                                 className={`border-4 border-dashed rounded-2xl p-12 text-center bg-white cursor-pointer transition-colors ${
-                                    pasteActive ? 'border-green-500 bg-green-50' : 'border-green-300 hover:border-green-400'
+                                    pasteActive 
+                                        ? 'border-green-500 bg-green-50' 
+                                        : 'border-green-300 hover:border-green-400'
                                 }`}
                                 onClick={() => pasteAreaRef.current?.focus()}
                             >
                                 <Copy className="w-12 h-12 mx-auto mb-4 text-green-500" />
                                 <p className="text-lg text-slate-700 mb-2 font-semibold">Paste Images</p>
-                                <p className="text-sm text-slate-500">Click here, then press Ctrl+V (Cmd+V on Mac)</p>
-                                {pasteActive && (
-                                    <p className="text-xs text-green-600 mt-2 font-medium">Ready to paste!</p>
-                                )}
+                                <p className="text-sm text-slate-500">Click here, then Ctrl+V</p>
                             </div>
                         </div>
 
                         {processing && (
-                            <div className="bg-white rounded-2xl p-8 text-center mb-8">
-                                <div className="animate-spin rounded-full h-12 w-12 border-4 border-slate-200 border-t-slate-600 mx-auto mb-4"></div>
-                                <p className="text-slate-600">Processing images...</p>
+                            <div className="bg-white rounded-2xl p-8 text-center mb-8 shadow-sm">
+                                <div className="animate-spin rounded-full h-12 w-12 border-4 border-slate-200 border-t-blue-600 mx-auto mb-4"></div>
+                                <p className="text-slate-600">Processing...</p>
                             </div>
                         )}
 
                         {images.length > 0 && (
                             <div className="mb-8">
                                 <div className="flex justify-between items-center mb-4">
-                                    <h2 className="text-2xl font-bold text-slate-800">
-                                        Processed Images ({images.length})
-                                    </h2>
+                                    <h2 className="text-2xl font-bold text-slate-800">Results ({images.length})</h2>
                                     <div className="flex gap-2">
-                                        <button
-                                            onClick={downloadAll}
-                                            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
-                                        >
-                                            <Download className="w-4 h-4" />
-                                            Download All
+                                        <button onClick={downloadAll} className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg transition-colors">
+                                            <Download className="w-4 h-4" /> Download All
                                         </button>
-                                        <button
-                                            onClick={clearAll}
-                                            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                            Clear All
+                                        <button onClick={() => setImages([])} className="flex items-center gap-2 px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors">
+                                            <Trash2 className="w-4 h-4" /> Clear
                                         </button>
                                     </div>
                                 </div>
 
-                                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
                                     {images.map((image) => (
-                                        <div key={image.id} className="bg-white rounded-xl p-4 shadow-lg">
-                                            <div className="relative mb-3">
-                                                <button
-                                                    onClick={() => removeImage(image.id)}
-                                                    className="absolute top-2 right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors z-10"
-                                                >
+                                        <div key={image.id} className="bg-white rounded-xl p-3 shadow-lg flex flex-col">
+                                            <div className="flex justify-between items-center mb-2 px-1">
+                                                <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded ${
+                                                    image.mode === 'modern' ? 'bg-blue-100 text-blue-700' :
+                                                    image.mode === 'fmc' ? 'bg-orange-100 text-orange-700' :
+                                                    'bg-purple-100 text-purple-700'
+                                                }`}>
+                                                    {image.mode}
+                                                </span>
+                                                <button onClick={() => setImages(prev => prev.filter(i => i.id !== image.id))} className="text-slate-400 hover:text-red-500">
                                                     <X className="w-4 h-4" />
                                                 </button>
-                                                <div className="border-2 border-slate-200 rounded-lg overflow-hidden bg-slate-50">
-                                                    <img src={image.cropped} alt="Cropped" className="w-full h-auto" />
-                                                </div>
                                             </div>
-                                            <div className="flex gap-2">
-                                                <button
-                                                    onClick={() => copyToClipboard(image)}
-                                                    className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm"
-                                                >
-                                                    {image.copied ? (
-                                                        <>
-                                                            <Check className="w-4 h-4" />
-                                                            Copied!
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <Copy className="w-4 h-4" />
-                                                            Copy
-                                                        </>
-                                                    )}
+                                            
+                                            <div className="relative flex-grow bg-slate-50 border-2 border-slate-100 rounded-lg overflow-hidden mb-3 flex items-center justify-center min-h-[200px]">
+                                                <img src={image.cropped} alt="Result" className="max-h-[250px] w-auto object-contain" />
+                                            </div>
+                                            
+                                            <div className="flex gap-2 mt-auto">
+                                                <button onClick={() => copyToClipboard(image)} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                                    image.copied ? 'bg-green-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                                                }`}>
+                                                    {image.copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                                                    {image.copied ? 'Copied' : 'Copy'}
                                                 </button>
-                                                <button
-                                                    onClick={() => downloadImage(image)}
-                                                    className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
-                                                >
+                                                <button onClick={() => downloadImage(image)} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg">
                                                     <Download className="w-4 h-4" />
-                                                    Save
                                                 </button>
                                             </div>
                                         </div>
